@@ -1,12 +1,36 @@
 from flask import Flask, request, session, jsonify
 from sqlalchemy import create_engine, text
-from models import db, CustomerSetup, SqlServer, UpdateDatetime, Users
+from models import db, CustomerSetup, SqlServer, UpdateDatetime, Users, CustomerLabels
+from sqlalchemy.exc import SQLAlchemyError
+from flask import current_app, g
 import bcrypt
+from flask_cors import CORS
+from sqlalchemy.orm import sessionmaker, scoped_session
 
 app = Flask(__name__)
 app.config.from_object('config.Config')
 app.secret_key = 'your_secret_key'
 db.init_app(app)
+CORS(app)
+
+
+def get_db_session():
+    if 'sqlserver_id' not in session or 'database' not in session:
+        return None
+
+    sqlserver_id = session['sqlserver_id']
+    database_name = session['database']
+
+    sql_server = SqlServer.query.get_or_404(sqlserver_id)
+
+    connection_string = (
+        f"mssql+pyodbc://{sql_server.ServerAdmin}:{sql_server.ServerPassword}@{sql_server.ServerURL}/{database_name}?"
+        "driver=ODBC+Driver+17+for+SQL+Server"
+    )
+    
+    engine = create_engine(connection_string)
+    Session = scoped_session(sessionmaker(bind=engine))
+    return Session
 
 @app.route('/login', methods=['POST'])
 def login():
@@ -50,6 +74,10 @@ def select_customer(customer_id):
     session['database'] = customer.database
     return jsonify({'message': 'Customer selected'}), 200
 
+
+#desde aca se deben aplicar las solictudes a la base de datos seleccionada por el cliente
+
+## Este endpoint Funciona
 @app.route('/get_logo', methods=['GET'])
 def get_logo():
     if 'user_id' not in session:
@@ -58,20 +86,12 @@ def get_logo():
     if 'customer_id' not in session:
         return jsonify({'error': 'Customer not selected'}), 400
 
-    customer_id = session['customer_id']
-    sqlserver_id = session['sqlserver_id']
-    database_name = session['database']
-
-    sql_server = SqlServer.query.get_or_404(sqlserver_id)
-
-    connection_string = (
-        f"mssql+pyodbc://{sql_server.ServerAdmin}:{sql_server.ServerPassword}@{sql_server.ServerURL}/{database_name}?"
-        "driver=ODBC+Driver+17+for+SQL+Server"
-    )
+    db_session = get_db_session()
+    if not db_session:
+        return jsonify({'error': 'Database connection not established'}), 500
 
     try:
-        engine = create_engine(connection_string)
-        with engine.connect() as connection:
+        with db_session() as connection:
             result = connection.execute(text('SELECT Logo FROM vUpdateDatetime'))
             logo = result.fetchone()
 
@@ -83,6 +103,50 @@ def get_logo():
     except Exception as e:
         print(f"Database error: {e}")
         return jsonify({'error': 'Database error'}), 500
+
+
+## Este endpoint NO FUNCIONA
+@app.route('/filtro-dinamico', methods=['GET'])
+def filtro_dinamico():
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not authorized'}), 401
+
+    if 'customer_id' not in session:
+        return jsonify({'error': 'Customer not selected'}), 400
+
+    db_session = get_db_session()
+    if not db_session:
+        return jsonify({'error': 'Database connection not established'}), 500
+
+    try:
+        query = db_session.query(CustomerLabels)
+
+        labelKey = request.args.get('labelKey')
+        label = request.args.get('label')
+        module = request.args.get('module')
+        languageId = request.args.get('languageId', type=int)
+
+        conditions = []
+        if labelKey:
+            conditions.append(CustomerLabels.labelKey.like(f'%{labelKey}%'))
+        if label:
+            conditions.append(CustomerLabels.label.like(f'%{label}%'))
+        if module:
+            conditions.append(CustomerLabels.module.like(f'%{module}%'))
+        if languageId and languageId != 4:
+            conditions.append(CustomerLabels.languageId == languageId)
+
+        if conditions:
+            query = query.filter(*conditions)
+
+        resultados = query.all()
+        return jsonify([label.to_dict() for label in resultados])
+
+    except Exception as e:
+        print(f"Database error: {e}")
+        return jsonify({'error': 'Database error'}), 500
+
+
 
 if __name__ == '__main__':
     app.run(debug=True)

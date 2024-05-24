@@ -28,3 +28,20 @@ class UpdateDatetime(db.Model):
     Logo = db.Column(db.String)
 
 
+class CustomerLabels(db.Model):
+    __tablename__ = 'customerlabels'
+
+    id = db.Column(db.Integer, primary_key=True)
+    label_key = db.Column(db.String(255), nullable=False)
+    label = db.Column(db.String(255), nullable=False)
+    module = db.Column(db.String(255), nullable=False)
+    language_id = db.Column(db.Integer, nullable=False)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'label_key': self.label_key,
+            'label': self.label,
+            'module': self.module,
+            'language_id': self.language_id
+        }
